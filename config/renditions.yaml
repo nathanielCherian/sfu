@@ -1,0 +1,39 @@
+# Transcoder configuration: one MPEG-TS input -> N constant-bitrate H.264 renditions.
+input: udp://127.0.0.1:5000?overrun_nonfatal=1&fifo_size=50000
+
+# Keyframes are forced at the same media timestamps in every rendition (needed so an
+# SFU can switch a subscriber between renditions on a keyframe).
+gop_seconds: 2.0
+
+encoder:
+  preset: veryfast        # x264 speed/quality trade-off
+  tune: zerolatency       # no lookahead / frame-threading delay
+  profile: baseline       # x264 "baseline" == Constrained Baseline (WebRTC-safe, no B-frames)
+  strict_cbr: true        # nal-hrd=cbr: pad with filler data so the rate is truly constant
+  vbv_buffer_seconds: 1.0 # rate-control buffer = bitrate * this
+
+# Resolution for renditions that don't pin one: the largest candidate height (never above the
+# source) whose bits-per-pixel, bitrate / (w * h * fps), is at least min_bpp.
+auto_resolution:
+  min_bpp: 0.04
+  heights: [1080, 720, 540, 360, 270, 180, 144]
+
+renditions:
+  - name: high
+    bitrate: 2500k
+    resolution: auto      # or e.g. 1280x720
+    outputs:
+      - out/high.ts
+      - udp://127.0.0.1:5001?pkt_size=1316
+  - name: mid
+    bitrate: 800k
+    resolution: auto
+    outputs:
+      - out/mid.ts
+      - udp://127.0.0.1:5002?pkt_size=1316
+  - name: low
+    bitrate: 250k
+    resolution: auto
+    outputs:
+      - out/low.ts
+      - udp://127.0.0.1:5003?pkt_size=1316
