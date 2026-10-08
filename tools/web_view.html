@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rendition Viewer</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --border: #dde0e5; --text: #1c1f24; --muted: #5d6470;
+    --accent: #2f6fde; --ok: #1f8a4c; --warn: #b26b00; --bad: #c43c3c; --video-bg: #000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111316; --panel: #1a1d21; --border: #2c3036; --text: #e6e8eb; --muted: #9aa1ab;
+      --accent: #6b9cf0; --ok: #4cc27f; --warn: #e0a043; --bad: #ef6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center;
+           padding: 14px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .hint { color: var(--muted); font-size: 13px; }
+  header .controls { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+           border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main { display: grid; gap: 16px; padding: 16px;
+         grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+          overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+  .tile.focus { grid-column: 1 / -1; }
+  .tile header { padding: 10px 12px; gap: 8px; background: none; }
+  .tile h2 { font-size: 15px; margin: 0; font-weight: 600; text-transform: capitalize; }
+  .chip { font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 99px; padding: 1px 8px; }
+  .state { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .state.live { color: var(--ok); }
+  .state.err { color: var(--bad); }
+  .stage { background: var(--video-bg); aspect-ratio: 16 / 9; display: grid; place-items: center;
+           overflow: auto; cursor: zoom-in; }
+  .tile.focus .stage { cursor: zoom-out; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  body.native .stage { place-items: center; }
+  body.native video { width: auto; height: auto; max-width: none; object-fit: none; }
+  dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 10px 12px; gap: 4px 12px; }
+  dt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .warn { color: var(--warn); }
+  @media (max-width: 480px) { dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rendition viewer</h1>
+  <span class="hint">H.264 renditions from the transcoder, repackaged as HLS. Click a video to enlarge it.</span>
+  <div class="controls">
+    <button id="native" aria-pressed="false" title="Show each video at its encoded pixel size instead of scaling to the tile">1:1 pixels</button>
+    <button id="live" title="Jump every player to the live edge">Go live</button>
+  </div>
+</header>
+<main id="grid"></main>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script>
+const RENDITIONS = /*RENDITIONS*/[];
+const kbps = bps => `${Math.round(bps / 1000).toLocaleString()} kbps`;
+const players = [];
+
+function tile(r) {
+  const el = document.createElement("section");
+  el.className = "tile";
+  el.innerHTML = `
+    <header><h2></h2><span class="chip target"></span><span class="state">connecting…</span></header>
+    <div class="stage"><video muted autoplay playsinline></video></div>
+    <dl>
+      <div><dt>Decoded</dt><dd class="res">–</dd></div>
+      <div><dt>Video bitrate</dt><dd class="rate">–</dd></div>
+      <div><dt>Behind live</dt><dd class="lat">–</dd></div>
+      <div><dt>Dropped</dt><dd class="drop">–</dd></div>
+    </dl>`;
+  el.querySelector("h2").textContent = r.name;
+  el.querySelector(".target").textContent = `target ${kbps(r.bitrate)} · ${r.resolution}`;
+  el.querySelector(".stage").addEventListener("click", () => el.classList.toggle("focus"));
+  document.getElementById("grid").append(el);
+  return el;
+}
+
+function setState(p, text, cls = "") {
+  p.state.textContent = text;
+  p.state.className = `state ${cls}`;
+}
+
+function start(p) {
+  const url = p.r.url + "?t=" + Date.now();
+  if (window.Hls && Hls.isSupported()) {
+    const hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 6, enableWorker: true,
+                          manifestLoadingMaxRetry: 2 });
+    p.hls = hls;
+    p.frags = new Map();   // sn -> {bytes, duration}
+    hls.on(Hls.Events.BUFFER_APPENDING, (_, d) => {
+      if (!d.frag || (d.type !== "video" && d.type !== "audiovideo")) return;
+      const f = p.frags.get(d.frag.sn) || { bytes: 0, duration: d.frag.duration };
+      f.bytes += d.data.byteLength;
+      p.frags.set(d.frag.sn, f);
+      while (p.frags.size > 8) p.frags.delete(p.frags.keys().next().value);
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { setState(p, "live", "live"); p.video.play().catch(() => {}); });
+    hls.on(Hls.Events.ERROR, (_, d) => {
+      if (!d.fatal) return;
+      setState(p, d.type === Hls.ErrorTypes.NETWORK_ERROR ? "waiting for stream…" : `error: ${d.details}`,
+               d.type === Hls.ErrorTypes.NETWORK_ERROR ? "" : "err");
+      hls.destroy();
+      p.hls = null;
+      setTimeout(() => start(p), 2000);   // transcoder not running yet, or restarted
+    });
+    hls.loadSource(url);
+    hls.attachMedia(p.video);
+  } else if (p.video.canPlayType("application/vnd.apple.mpegurl")) {
+    p.video.src = url;   // Safari: native HLS (no per-segment bitrate stats)
+    p.video.addEventListener("playing", () => setState(p, "live", "live"), { once: true });
+  } else {
+    setState(p, "HLS not supported here (hls.js failed to load?)", "err");
+  }
+}
+
+function refresh(p) {
+  const v = p.video;
+  if (v.videoWidth) p.res.textContent = `${v.videoWidth}×${v.videoHeight}`;
+  if (p.frags && p.frags.size) {
+    let bytes = 0, dur = 0;
+    for (const f of p.frags.values()) { bytes += f.bytes; dur += f.duration; }
+    if (dur > 0) {
+      const rate = bytes * 8 / dur;
+      p.rate.textContent = kbps(rate);
+      p.rate.classList.toggle("warn", Math.abs(rate / p.r.bitrate - 1) > 0.15);
+    }
+  }
+  if (p.hls && Number.isFinite(p.hls.latency) && p.hls.latency > 0) p.lat.textContent = `${p.hls.latency.toFixed(1)} s`;
+  const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+  if (q && q.totalVideoFrames) p.drop.textContent = `${q.droppedVideoFrames} / ${q.totalVideoFrames}`;
+}
+
+for (const r of RENDITIONS) {
+  const el = tile(r);
+  const p = { r, el, video: el.querySelector("video"), state: el.querySelector(".state"),
+              res: el.querySelector(".res"), rate: el.querySelector(".rate"),
+              lat: el.querySelector(".lat"), drop: el.querySelector(".drop") };
+  players.push(p);
+  start(p);
+}
+setInterval(() => players.forEach(refresh), 1000);
+
+document.getElementById("native").addEventListener("click", e => {
+  const on = document.body.classList.toggle("native");
+  e.currentTarget.setAttribute("aria-pressed", String(on));
+});
+document.getElementById("live").addEventListener("click", () => {
+  for (const p of players) {
+    if (p.hls && Number.isFinite(p.hls.liveSyncPosition)) p.video.currentTime = p.hls.liveSyncPosition;
+    p.video.play().catch(() => {});
+  }
+});
+</script>
+</body>
+</html>

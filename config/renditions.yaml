@@ -24,16 +24,19 @@ renditions:
     resolution: auto      # or e.g. 1280x720
     outputs:
       - out/high.ts
+      - out/hls/high/index.m3u8   # browser viewer: tools/web_view.py
       - udp://127.0.0.1:5001?pkt_size=1316
   - name: mid
     bitrate: 800k
     resolution: auto
     outputs:
       - out/mid.ts
+      - out/hls/mid/index.m3u8   # browser viewer: tools/web_view.py
       - udp://127.0.0.1:5002?pkt_size=1316
   - name: low
     bitrate: 250k
     resolution: auto
     outputs:
       - out/low.ts
+      - out/hls/low/index.m3u8   # browser viewer: tools/web_view.py
       - udp://127.0.0.1:5003?pkt_size=1316

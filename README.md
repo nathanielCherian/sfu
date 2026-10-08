@@ -74,7 +74,36 @@ Encoder settings, chosen for WebRTC:
   between layers at any keyframe. SPS/PPS are repeated in-band before every IDR.
 
 Outputs per rendition can be any mix of `*.ts` (MPEG-TS, video + passthrough audio), `*.h264` (raw
-Annex-B video) and `udp://host:port` (MPEG-TS).
+Annex-B video), `*.m3u8` (live HLS, for the browser viewer) and `udp://host:port` (MPEG-TS).
+
+## Watching the streams
+
+**In a browser (works over ssh):** the transcoder also writes each rendition as live HLS
+(`out/hls/<name>/index.m3u8`); `tools/web_view.py` serves those plus a page that plays all
+renditions side by side, showing each one's decoded resolution, measured video bitrate,
+delay behind live, and dropped frames. The H.264 is not re-encoded, only repackaged into HLS
+segments. Expect about 4-6 s behind live (2 s segments, one per GOP); the WebRTC path in phase 2
+is the low-latency one.
+
+```bash
+# on the server (with serve_source.sh + the transcoder running)
+.venv/bin/python tools/web_view.py            # listens on 127.0.0.1:8080
+# on your machine
+ssh -L 8080:localhost:8080 <server>           # then open http://localhost:8080
+```
+
+"1:1 pixels" shows each video at its encoded size; the default scales all of them to the same tile
+size, so you can compare quality. Click a video to enlarge it.
+
+**In a desktop player over ssh:** `tools/relay.sh` writes a rendition to stdout (stream copy):
+
+```bash
+ssh <server> ~/sfu-test/tools/relay.sh mid      | ffplay -fflags nobuffer -flags low_delay -framedrop -
+ssh <server> ~/sfu-test/tools/relay.sh mosaic   | mpv -          # all renditions side by side (re-encoded)
+ssh <server> ~/sfu-test/tools/relay.sh file low | vlc -          # replay the recording out/low.ts
+```
+
+Each UDP port delivers to one reader at a time, so don't relay the same rendition twice at once.
 
 ## Embedding (for phase 2)
 
@@ -100,4 +129,6 @@ transcoder/
   sinks.py                 file / UDP muxing
   config.py, __main__.py   YAML loading, CLI
 tools/check_renditions.py  ffprobe-based verification (bitrate, profile, IDR alignment)
+tools/web_view.py(+.html)  browser viewer for the HLS outputs
+tools/relay.sh             pipe a rendition to stdout for viewing over ssh
 ```
