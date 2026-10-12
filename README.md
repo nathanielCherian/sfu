@@ -107,7 +107,7 @@ Each UDP port delivers to one reader at a time, so don't relay the same renditio
 
 ## Serving the renditions over WebRTC (phase 2)
 
-[webrtc-test](https://github.com/nathanielCherian/webrtc-test) (branch `simulcast-source`) consumes the UDP
+[webrtc-test](https://github.com/nathanielCherian/webrtc-test) consumes the UDP
 outputs directly: `./bin/server --simulcast high=127.0.0.1:5001@2500k,mid=127.0.0.1:5002@800k,low=127.0.0.1:5003@250k`.
 Every viewer gets its own PeerConnection and rate control (GCC or a test wave). The rate control picks which
 rendition to forward and switches at the aligned IDRs, so nothing is re-encoded per viewer. While it runs, it
